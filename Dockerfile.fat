@@ -1,0 +1,67 @@
+# ============================================================
+# Dockerfile.fat  —  Intentionally "fat" / unoptimised image
+# Base: ubuntu:20.04  |  Expected size: > 1 GB
+# ============================================================
+
+FROM ubuntu:20.04
+
+# Prevent interactive prompts during apt installs
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ── System packages ──────────────────────────────────────────
+# Installs ALL build tools, compilers, and utilities
+# (this is intentionally bloated for comparison purposes)
+RUN apt-get update && apt-get install -y \
+    # Python runtime + build tools
+    python3.9 \
+    python3.9-dev \
+    python3-pip \
+    python3-setuptools \
+    python3-wheel \
+    # Build essentials (not needed at runtime — bloat)
+    build-essential \
+    gcc \
+    g++ \
+    cmake \
+    make \
+    # Networking + download tools (not needed at runtime — bloat)
+    curl \
+    wget \
+    git \
+    # Image processing system libs
+    libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
+    libgl1-mesa-glx \
+    # Extra system tools (not needed at runtime — bloat)
+    vim \
+    nano \
+    htop \
+    net-tools \
+    iputils-ping \
+    && rm -rf /var/lib/apt/lists/*
+
+# Make python3.9 the default python
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.9 1 \
+    && update-alternatives --install /usr/bin/pip    pip    /usr/bin/pip3    1
+
+# ── Python dependencies ──────────────────────────────────────
+# Full versions of torch + torchvision (CPU build is ~800 MB alone)
+RUN pip install --no-cache-dir \
+    torch \
+    torchvision \
+    pillow \
+    numpy \
+    requests
+
+# ── Application files ─────────────────────────────────────────
+WORKDIR /app
+COPY inference.py  .
+COPY model.pt      .
+
+# ── Default command ───────────────────────────────────────────
+# Pass --image flag when running the container, e.g.:
+#   docker run model-fat --image sample.jpg
+ENTRYPOINT ["python", "inference.py"]
+CMD ["--help"]

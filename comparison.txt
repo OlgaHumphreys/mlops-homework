@@ -1,0 +1,145 @@
+========================================================
+  Docker Image Comparison Report
+  Fat Image vs Slim Image (MobileNetV2 TorchScript)
+========================================================
+
+------------------------------------------------------------
+1. IMAGE SIZES
+------------------------------------------------------------
+
+Run this to see actual sizes after building:
+  docker images | grep "model-"
+
+Expected results:
+  REPOSITORY    TAG     SIZE
+  model-fat     latest  ~2.0 GB   (Ubuntu base + all apt packages + torch)
+  model-slim    latest  ~900 MB   (python:3.9-slim base + runtime libs only)
+
+Why the difference?
+- The fat image uses ubuntu:20.04 as base (~72 MB) and then installs
+  build tools, compilers, networking utilities, and text editors on top.
+- The slim image starts from python:3.9-slim (~125 MB) and only copies
+  pre-built packages from the builder stage — no compilers survive.
+
+------------------------------------------------------------
+2. NUMBER OF LAYERS
+------------------------------------------------------------
+
+Run this to see layers:
+  docker history model-fat  --no-trunc
+  docker history model-slim --no-trunc
+
+Expected results:
+  model-fat   ~15–20 layers
+  model-slim  ~10–12 layers
+
+Why fewer layers in slim?
+- Multi-stage builds discard all intermediate layers from Stage 1.
+- Only the final COPY and RUN instructions in Stage 2 add layers.
+
+------------------------------------------------------------
+3. UNNECESSARY TOOLS / PACKAGES IN THE FAT IMAGE
+------------------------------------------------------------
+
+The fat image contains the following tools that are NOT needed
+at inference runtime:
+
+  Category            | Package(s)
+  --------------------|----------------------------------------------
+  Build compilers     | gcc, g++, cmake, make, build-essential
+  Source control      | git
+  Download utilities  | wget, curl
+  Text editors        | vim, nano
+  System monitoring   | htop, net-tools, iputils-ping
+  Python build tools  | python3.9-dev, python3-setuptools, python3-wheel
+
+These packages:
+  - Add hundreds of MBs to the image
+  - Increase the attack surface (e.g., compilers can be used to build
+    malicious code inside a compromised container)
+  - Slow down image pulls in CI/CD pipelines and Kubernetes clusters
+
+------------------------------------------------------------
+4. PROBLEMS WITH THE FAT IMAGE
+------------------------------------------------------------
+
+a) SIZE
+   A 2 GB image takes much longer to push/pull from a registry.
+   On a cloud VM with a slow network, this can add minutes to every
+   deployment cycle.
+
+b) SECURITY
+   Every installed package is a potential vulnerability. Tools like
+   curl, wget, and gcc are frequent targets in container escape exploits.
+
+c) COLD START
+   Larger images mean longer cold-start times in serverless or
+   auto-scaling environments (AWS Lambda, Google Cloud Run, etc.).
+
+d) COST
+   Container registries charge for storage. A 2 GB image used across
+   10 replicas × 10 deployments/day = significant bandwidth costs.
+
+------------------------------------------------------------
+5. OPTIMIZATION RECOMMENDATIONS
+------------------------------------------------------------
+
+Recommendation 1 — Use distroless base images
+  Google's distroless images contain only the language runtime and
+  app dependencies — no shell, no package manager, no OS tools.
+  Example:
+    FROM gcr.io/distroless/python3-debian11
+  Result: potentially cuts image to ~600 MB or less.
+
+Recommendation 2 — Pin exact dependency versions
+  Use requirements.txt with pinned versions to avoid pulling
+  unnecessary transitive dependencies in future builds.
+    torch==2.0.1+cpu
+    torchvision==0.15.2+cpu
+
+Recommendation 3 — Use CPU-only PyTorch wheel
+  The default torch pip package includes CUDA support (~2 GB).
+  If you don't need GPU in production, install the CPU-only build:
+    pip install torch --index-url https://download.pytorch.org/whl/cpu
+  This alone can cut the image by ~1.5 GB.
+
+Recommendation 4 — TorchScript Lite (torch::deploy / lite interpreter)
+  For edge deployment, TorchScript Lite strips unused operators
+  from the model file, reducing both model.pt size and the runtime
+  needed to execute it.
+
+Recommendation 5 — Use .dockerignore
+  Add a .dockerignore file to prevent the build context from
+  copying __pycache__, *.pyc, .git/, and large test data into
+  the image:
+    __pycache__/
+    *.pyc
+    .git/
+    *.egg-info/
+    data/
+
+Recommendation 6 — Combine RUN instructions
+  Each RUN line creates a new layer. Chaining commands with &&
+  and cleaning up in the same layer keeps images smaller:
+    RUN apt-get update && apt-get install -y pkg && rm -rf /var/lib/apt/lists/*
+
+------------------------------------------------------------
+6. SUMMARY TABLE
+------------------------------------------------------------
+
+  Metric               | Fat Image        | Slim Image
+  ---------------------|------------------|------------------
+  Base image           | ubuntu:20.04     | python:3.9-slim
+  Build strategy       | Single stage     | Multi-stage
+  Approx. size         | ~2.0 GB          | ~900 MB
+  Layer count          | ~18              | ~11
+  Compilers included   | Yes              | No
+  Shell / utils        | Yes              | Minimal
+  Security footprint   | High             | Low
+  Build time           | ~5–8 min         | ~5–8 min (similar)
+  Pull time (slow net) | Slow             | ~2× faster
+  Suitable for prod    | No               | Yes (with distroless: ideal)
+
+========================================================
+  Generated for MLOps Homework — Lesson 3
+========================================================

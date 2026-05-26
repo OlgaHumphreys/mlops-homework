@@ -1,0 +1,57 @@
+# ============================================================
+# Dockerfile.slim  —  Optimised multi-stage build
+# Stage 1 (builder): installs everything needed to build deps
+# Stage 2 (runtime): copies only what is needed to run
+# Expected size: significantly smaller than the fat image
+# ============================================================
+
+
+# ── Stage 1: Builder ─────────────────────────────────────────
+FROM python:3.9-slim AS builder
+
+WORKDIR /install
+
+# Install build-time system libs (stays in this stage only)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libglib2.0-0 \
+    libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages into an isolated directory
+# so we can copy just the packages to the runtime stage
+RUN pip install --no-cache-dir --prefix=/install/deps \
+    torch \
+    torchvision \
+    pillow \
+    numpy \
+    requests
+
+
+# ── Stage 2: Runtime ─────────────────────────────────────────
+FROM python:3.9-slim AS runtime
+
+WORKDIR /app
+
+# Minimal runtime system libs only (no compilers, no build tools)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy ONLY the installed Python packages from the builder stage
+COPY --from=builder /install/deps /usr/local
+
+# Copy ONLY the application files
+COPY inference.py .
+COPY model.pt     .
+
+# Run as non-root user for security best practice
+RUN useradd -m appuser
+USER appuser
+
+# ── Default command ───────────────────────────────────────────
+# Pass --image flag when running the container, e.g.:
+#   docker run model-slim --image sample.jpg
+ENTRYPOINT ["python", "inference.py"]
+CMD ["--help"]
